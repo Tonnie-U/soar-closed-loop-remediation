@@ -1,0 +1,34 @@
+[Unit]
+Description=SOAR closed-loop remediation daemon
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=soar
+Group=soar
+EnvironmentFile=/etc/soar/soar.env
+WorkingDirectory=/opt/soar
+ExecStart=/opt/soar/venv/bin/uvicorn soar_remediator:app --host 0.0.0.0 --port 8088
+Restart=on-failure
+RestartSec=5
+
+# The daemon only ever needs to read its own code and write one log file.
+# Everything that touches the system proper goes through sudo to a fixed
+# list of playbooks, so the service itself can be locked down hard.
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# ProtectSystem=strict makes the whole filesystem read-only inside this
+# unit's mount namespace. sudo does NOT escape a namespace, so every path
+# a playbook writes to must be listed here or the root cp fails silently.
+ReadWritePaths=/var/log /var/lock /etc/ssh /etc/nginx /etc/soar
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=false
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

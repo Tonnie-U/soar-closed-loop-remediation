@@ -1,0 +1,171 @@
+---
+# remediate_certificate.yml — Trigger B: revoke an expired or compromised SSH
+# certificate and terminate any live sessions belonging to its principal.
+#
+# Required: -e soar_certificate_id=<key id>
+# Optional: -e soar_principal=<principal>
+#
+# The playbook refuses to act without an explicit Key ID. "Revoke whatever
+# looks wrong" is a denial-of-service primitive, and an automated control that
+# guesses is one bad alert away from locking out the whole fleet.
+
+- name: Revoke an SSH certificate and terminate its sessions
+  hosts: soar_target
+  connection: local
+  gather_facts: false
+  become: false        # the wrapper is already root via scoped sudo
+
+  vars:
+    monitored_dir: /etc/ssh/monitored-certs
+    retired_dir: /etc/ssh/revoked-certs
+    revoked_keys: /etc/ssh/revoked_keys
+    dropin: /etc/ssh/sshd_config.d/10-revocation.conf
+
+  tasks:
+
+    - name: Require an explicit certificate identifier
+      ansible.builtin.assert:
+        that:
+          - soar_certificate_id is defined
+          - soar_certificate_id | length > 0
+        fail_msg: "[cert] FAIL no certificate id supplied — refusing to guess"
+        quiet: true
+
+    - name: Announce the incident being handled
+      ansible.builtin.debug:
+        msg: >-
+          [cert] revocation started
+          (cert_id={{ soar_certificate_id }}
+          principal={{ soar_principal | default('unset') }})
+
+    - name: List the monitored certificate register
+      ansible.builtin.find:
+        paths: "{{ monitored_dir }}"
+        patterns: "*-cert.pub"
+      register: register_contents
+
+    # Matched by Key ID read out of the certificate itself, never by filename.
+    # The filename is ours; the Key ID is what the server actually checked.
+    - name: Read the Key ID of each monitored certificate
+      ansible.builtin.command: "ssh-keygen -L -f {{ item.path }}"
+      loop: "{{ register_contents.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      changed_when: false
+      failed_when: false
+      check_mode: false      # a read-only probe must still run under --check
+      register: cert_details
+
+    - name: Identify the certificate carrying this Key ID
+      ansible.builtin.set_fact:
+        target_cert: >-
+          {{ (cert_details.results
+              | selectattr('stdout', 'search', 'Key ID: "' ~ soar_certificate_id ~ '"')
+              | map(attribute='item.path') | list | first) | default('') }}
+
+    - name: Fail if no monitored certificate carries that Key ID
+      ansible.builtin.fail:
+        msg: "[cert] FAIL no monitored certificate carries Key ID {{ soar_certificate_id }}"
+      when: target_cert | length == 0
+
+    - name: Report the match
+      ansible.builtin.debug:
+        msg: "[cert] matched {{ soar_certificate_id }} to {{ target_cert }}"
+
+    - name: Ensure the revocation list exists
+      ansible.builtin.file:
+        path: "{{ revoked_keys }}"
+        state: touch
+        owner: root
+        group: root
+        mode: "0644"
+        modification_time: preserve
+        access_time: preserve
+
+    - name: Read the certificate to be revoked
+      ansible.builtin.slurp:
+        src: "{{ target_cert }}"
+      register: cert_blob
+
+    # lineinfile is idempotent: revoking an already-revoked certificate is a
+    # no-op rather than a duplicate entry.
+    - name: Append the certificate to the revocation list
+      ansible.builtin.lineinfile:
+        path: "{{ revoked_keys }}"
+        line: "{{ cert_blob.content | b64decode | trim }}"
+        state: present
+        create: true
+        owner: root
+        group: root
+        mode: "0644"
+      register: revocation
+
+    # Without this directive the file exists and is ignored — a failure mode
+    # that looks exactly like success.
+    - name: Ensure sshd is told to consult the revocation list
+      ansible.builtin.copy:
+        content: "RevokedKeys {{ revoked_keys }}\n"
+        dest: "{{ dropin }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: directive
+
+    - name: Validate the SSH configuration before reloading
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+
+    - name: Reload SSH so the revocation takes effect
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: reloaded
+      when: revocation.changed or directive.changed
+
+    # Revocation stops future authentication. It does nothing to a session
+    # already established, because that session holds an open channel and sshd
+    # does not re-check the credential. Terminating it is necessary, not
+    # redundant.
+    - name: Terminate live sessions for the principal
+      when:
+        - soar_principal is defined
+        - soar_principal | length > 0
+      block:
+
+        - name: Check whether the principal is a local account
+          ansible.builtin.getent:
+            database: passwd
+            key: "{{ soar_principal }}"
+          failed_when: false
+          register: principal_lookup
+
+        - name: Terminate the principal's processes
+          ansible.builtin.command: "pkill -KILL -u {{ soar_principal }}"
+          register: kill_result
+          changed_when: kill_result.rc == 0
+          failed_when: kill_result.rc not in [0, 1]   # 1 means no processes
+          when: principal_lookup.ansible_facts.getent_passwd is defined
+
+        - name: Note that the principal is not local
+          ansible.builtin.debug:
+            msg: "[cert] principal {{ soar_principal }} is not a local account — nothing to terminate"
+          when: principal_lookup.ansible_facts.getent_passwd is not defined
+
+    # A revoked certificate left in the register keeps publishing EXPIRED, so
+    # the alert never recovers and the pipeline cannot tell a new incident from
+    # the one just handled.
+    - name: Ensure the retired directory exists
+      ansible.builtin.file:
+        path: "{{ retired_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Retire the certificate from the monitored register
+      ansible.builtin.command:
+        cmd: "mv {{ target_cert }} {{ retired_dir }}/"
+        removes: "{{ target_cert }}"
+
+    - name: Emit the summary the daemon parses
+      ansible.builtin.debug:
+        msg: "[cert] revocation finished: {{ soar_certificate_id }} revoked, 0 failures"

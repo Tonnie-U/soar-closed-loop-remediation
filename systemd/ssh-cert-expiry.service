@@ -1,0 +1,6 @@
+[Unit]
+Description=SSH certificate expiry publisher
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ssh-cert-expiry-check.sh

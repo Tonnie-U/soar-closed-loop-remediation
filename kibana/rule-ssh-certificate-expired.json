@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "Trigger B: an SSH certificate past its validity window.",
+    "",
+    "The rule NAME is load-bearing. The daemon's decision engine selects a",
+    "playbook by matching the rule name, and this one is chosen because it",
+    "contains both 'certificate' and 'expir'. Renaming the rule without",
+    "updating select_playbook() silently disables remediation - the webhook",
+    "still arrives and the daemon still answers 200, having done nothing.",
+    "",
+    "size MUST be 1. The expiry publisher runs every 30 seconds, so a 2-minute",
+    "window holds four matching documents; a Mustache section over context.hits",
+    "would emit the key ID four times, concatenated, and the playbook would find",
+    "no certificate carrying that id.",
+    "",
+    "certificate_id and principal are not in the webhook payload defined by the",
+    "brief. They are lifted out of the matching document here because the",
+    "playbook refuses to guess which certificate to revoke."
+  ],
+  "name": "SSH Certificate Expired",
+  "rule_type_id": ".es-query",
+  "consumer": "alerts",
+  "enabled": true,
+  "schedule": { "interval": "1m" },
+  "params": {
+    "searchType": "esQuery",
+    "index": ["cert-events"],
+    "timeField": "@timestamp",
+    "esQuery": "{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"ssh_cert.status.keyword\":\"EXPIRED\"}}]}},\"sort\":[{\"@timestamp\":{\"order\":\"desc\"}}]}",
+    "size": 1,
+    "timeWindowSize": 2,
+    "timeWindowUnit": "m",
+    "threshold": [0],
+    "thresholdComparator": ">"
+  },
+  "actions": [
+    {
+      "group": "query matched",
+      "id": "<connector id of SOAR Remediator Webhook>",
+      "params": {
+        "body": "{\n  \"target_host\": \"siem-endpoint\",\n  \"alert_rule\": \"{{rule.name}}\",\n  \"severity\": \"high\",\n  \"certificate_id\": \"{{#context.hits}}{{_source.ssh_cert.key_id}}{{/context.hits}}\",\n  \"principal\": \"{{#context.hits}}{{_source.ssh_cert.principal}}{{/context.hits}}\",\n  \"timestamp\": \"{{date}}\"\n}"
+      }
+    }
+  ]
+}

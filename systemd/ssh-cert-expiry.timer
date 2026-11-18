@@ -1,0 +1,14 @@
+[Unit]
+Description=Publish SSH certificate expiry state every 30 seconds
+
+# Thirty seconds so the demonstration completes inside a working session.
+# Certificate expiry moves on a scale of days; in production this would be
+# OnCalendar=daily with Persistent=true and RandomizedDelaySec=1h.
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=30s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

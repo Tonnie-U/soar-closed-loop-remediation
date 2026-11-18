@@ -1,0 +1,20 @@
+# /etc/sudoers.d/soar — mode 0440, validated with: visudo -cf /etc/sudoers.d/soar
+#
+# The daemon runs as an unprivileged account and reaches root only through
+# these three scripts, by absolute path. No wildcards: a wildcard here would
+# let the daemon run anything whose path happened to match.
+
+soar ALL=(root) NOPASSWD: /usr/local/share/soar/playbooks/remediate_drift.sh
+soar ALL=(root) NOPASSWD: /usr/local/share/soar/playbooks/remediate_certificate.sh
+soar ALL=(root) NOPASSWD: /usr/local/share/soar/playbooks/reaudit.sh
+
+# sudo resets the environment by default (env_reset), which silently strips the
+# alert context the daemon exports before invoking a playbook. For the drift
+# playbook that only cost a log line reading "rule=unset host=unset". For the
+# certificate playbook it was fatal: it refuses to guess which certificate to
+# revoke, so with no SOAR_CERTIFICATE_ID it exited 1 on every alert.
+#
+# Only these five names are carried through. Passing the whole environment
+# would hand a playbook anything the daemon happened to hold, including the
+# webhook secrets read from soar.env.
+Defaults:soar env_keep += "SOAR_TARGET_HOST SOAR_ALERT_RULE SOAR_SEVERITY SOAR_CERTIFICATE_ID SOAR_PRINCIPAL"

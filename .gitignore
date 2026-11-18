@@ -1,0 +1,10 @@
+# Never commit secrets or captured evidence
+soar.env
+*.env
+*.log
+*-cert.pub
+revoked_keys
+ssh_user_ca
+ssh_user_ca.pub
+__pycache__/
+*.pyc

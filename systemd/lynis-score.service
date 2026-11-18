@@ -1,0 +1,6 @@
+[Unit]
+Description=Lynis hardening index publisher
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/publish-lynis-score.sh

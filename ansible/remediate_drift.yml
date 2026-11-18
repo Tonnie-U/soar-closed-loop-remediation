@@ -1,0 +1,229 @@
+---
+# remediate_drift.yml — Trigger A: restore security configuration that has
+# deviated from the approved golden baseline.
+#
+# Invoked by the SOAR daemon through a thin wrapper that sudoers grants by
+# absolute path, so the privilege boundary is unchanged from the shell
+# implementation this replaces.
+#
+# Two things Ansible gives us that the shell version could not:
+#
+#   1. Real rollback. If the restored configuration fails validation, the
+#      block/rescue below puts the previous file back and fails loudly. The
+#      shell version validated after writing and had no way back.
+#
+#   2. Alert context arrives as --extra-vars, not as environment variables.
+#      sudo's env_reset silently stripped the environment in the shell
+#      implementation, which went unnoticed for weeks. That whole class of
+#      fault cannot occur here.
+
+- name: Restore security configuration from the approved baseline
+  hosts: soar_target
+  connection: local
+  gather_facts: false
+  become: false        # the wrapper is already root via scoped sudo
+
+  vars:
+    golden_dir: /etc/soar/golden
+    evidence_dir: /var/lib/soar/evidence
+    stamp: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+
+    ssh_files:
+      - name: sshd_config
+        golden: "{{ golden_dir }}/sshd_config"
+        live: /etc/ssh/sshd_config
+        mode: "0644"
+      - name: 00-ca-auth.conf
+        golden: "{{ golden_dir }}/00-ca-auth.conf"
+        live: /etc/ssh/sshd_config.d/00-ca-auth.conf
+        mode: "0644"
+
+    nginx_files:
+      - name: nginx.conf
+        golden: "{{ golden_dir }}/nginx.conf"
+        live: /etc/nginx/nginx.conf
+        mode: "0644"
+      - name: lab-tls
+        golden: "{{ golden_dir }}/lab-tls"
+        live: /etc/nginx/sites-available/lab-tls
+        mode: "0644"
+
+  tasks:
+
+    - name: Announce the incident being handled
+      ansible.builtin.debug:
+        msg: >-
+          [drift] remediation started
+          (rule={{ soar_alert_rule | default('unset') }}
+          host={{ soar_target_host | default('unset') }})
+
+    - name: Ensure the evidence directory exists
+      ansible.builtin.file:
+        path: "{{ evidence_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    # Only files that actually have a golden copy are managed. A missing
+    # baseline is skipped, never treated as "restore to empty".
+    - name: Determine which baselines are present
+      ansible.builtin.stat:
+        path: "{{ item.golden }}"
+      loop: "{{ ssh_files + nginx_files }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: baseline_stat
+
+    - name: Build the managed file list
+      ansible.builtin.set_fact:
+        ssh_managed: >-
+          {{ ssh_files | selectattr('golden', 'in',
+             baseline_stat.results | selectattr('stat.exists') | map(attribute='item.golden') | list) | list }}
+        nginx_managed: >-
+          {{ nginx_files | selectattr('golden', 'in',
+             baseline_stat.results | selectattr('stat.exists') | map(attribute='item.golden') | list) | list }}
+
+    # ---------------------------------------------------------------- SSH
+    - name: Restore and validate SSH configuration
+      block:
+
+        - name: Preserve the live SSH files as evidence before overwriting
+          ansible.builtin.copy:
+            src: "{{ item.live }}"
+            dest: "{{ evidence_dir }}/{{ item.name }}.drift-{{ stamp }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0600"
+          loop: "{{ ssh_managed }}"
+          loop_control:
+            label: "{{ item.name }}"
+          failed_when: false
+
+        - name: Restore SSH configuration from the golden baseline
+          ansible.builtin.copy:
+            src: "{{ item.golden }}"
+            dest: "{{ item.live }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "{{ item.mode }}"
+            backup: true
+          loop: "{{ ssh_managed }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: ssh_restore
+
+        # Validated as a whole, not per file: a drop-in fragment has no host
+        # keys of its own and will not pass validation in isolation.
+        - name: Validate the complete SSH configuration
+          ansible.builtin.command: /usr/sbin/sshd -t
+          changed_when: false
+
+
+      rescue:
+
+        - name: Roll back the SSH configuration
+          ansible.builtin.copy:
+            src: "{{ item.backup_file }}"
+            dest: "{{ item.dest }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0644"
+          loop: "{{ ssh_restore.results | default([]) | selectattr('backup_file', 'defined') | list }}"
+          loop_control:
+            label: "{{ item.dest }}"
+
+        - name: Fail loudly rather than leave an unvalidated configuration
+          ansible.builtin.fail:
+            msg: "[drift] FAIL sshd validation — restored file rejected, previous file put back"
+
+    # Deliberately outside the block above. A rollback is correct when the
+    # restored file fails validation — the baseline itself is bad and must not
+    # be left in place. It is wrong when only the reload fails: the on-disk
+    # configuration is correct and validated, and reverting it would put the
+    # weakened file back. A failed reload is reported, never undone.
+    - name: Reload SSH
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: reloaded
+      when: ssh_restore.changed | default(false)
+
+    # -------------------------------------------------------------- NGINX
+    - name: Restore and validate NGINX configuration
+      block:
+
+        - name: Preserve the live NGINX files as evidence before overwriting
+          ansible.builtin.copy:
+            src: "{{ item.live }}"
+            dest: "{{ evidence_dir }}/{{ item.name }}.drift-{{ stamp }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0600"
+          loop: "{{ nginx_managed }}"
+          loop_control:
+            label: "{{ item.name }}"
+          failed_when: false
+
+        - name: Restore NGINX configuration from the golden baseline
+          ansible.builtin.copy:
+            src: "{{ item.golden }}"
+            dest: "{{ item.live }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "{{ item.mode }}"
+            backup: true
+          loop: "{{ nginx_managed }}"
+          loop_control:
+            label: "{{ item.name }}"
+          register: nginx_restore
+
+        - name: Validate the complete NGINX configuration
+          ansible.builtin.command: /usr/sbin/nginx -t
+          changed_when: false
+
+
+      rescue:
+
+        - name: Roll back the NGINX configuration
+          ansible.builtin.copy:
+            src: "{{ item.backup_file }}"
+            dest: "{{ item.dest }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0644"
+          loop: "{{ nginx_restore.results | default([]) | selectattr('backup_file', 'defined') | list }}"
+          loop_control:
+            label: "{{ item.dest }}"
+
+        - name: Fail loudly rather than leave an unvalidated configuration
+          ansible.builtin.fail:
+            msg: "[drift] FAIL nginx validation — restored file rejected, previous file put back"
+
+    # Deliberately outside the block above. A rollback is correct when the
+    # restored file fails validation — the baseline itself is bad and must not
+    # be left in place. It is wrong when only the reload fails: the on-disk
+    # configuration is correct and validated, and reverting it would put the
+    # weakened file back. A failed reload is reported, never undone.
+    - name: Reload NGINX
+      ansible.builtin.systemd_service:
+        name: nginx
+        state: reloaded
+      when: nginx_restore.changed | default(false)
+
+    # ------------------------------------------------------------- SUMMARY
+    - name: Count what changed
+      ansible.builtin.set_fact:
+        restored_count: >-
+          {{ (ssh_restore.results | default([]) | selectattr('changed') | list | length)
+           + (nginx_restore.results | default([]) | selectattr('changed') | list | length) }}
+
+    # The daemon parses this line. Keep the wording: "N restored, N failures".
+    - name: Emit the summary the daemon parses
+      ansible.builtin.debug:
+        msg: "[drift] remediation finished: {{ restored_count }} restored, 0 failures"

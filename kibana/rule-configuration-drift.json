@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Trigger A (fast path): configuration integrity.",
+    "",
+    "This rule, not the Lynis rule, is what makes a sub-60-second response",
+    "possible. A Lynis audit takes 60-90 seconds to run, so it cannot sit on a",
+    "detection path with a 60-second target; the file-hash comparison in",
+    "publish-drift-check.sh completes in well under a second and runs every 30.",
+    "",
+    "Create with: POST kbn:/api/alerting/rule"
+  ],
+  "name": "Configuration Drift Detected",
+  "rule_type_id": ".es-query",
+  "consumer": "alerts",
+  "enabled": true,
+  "schedule": { "interval": "1m" },
+  "params": {
+    "searchType": "esQuery",
+    "index": ["drift-events"],
+    "timeField": "@timestamp",
+    "esQuery": "{\"query\":{\"bool\":{\"filter\":[{\"term\":{\"drift.status.keyword\":\"DRIFTED\"}}]}},\"sort\":[{\"@timestamp\":{\"order\":\"desc\"}}]}",
+    "size": 1,
+    "timeWindowSize": 2,
+    "timeWindowUnit": "m",
+    "threshold": [0],
+    "thresholdComparator": ">"
+  },
+  "actions": [
+    {
+      "group": "query matched",
+      "id": "<connector id of SOAR Remediator Webhook>",
+      "params": {
+        "body": "{\n  \"target_host\": \"{{context.hits.0._source.host.name}}\",\n  \"alert_rule\": \"{{rule.name}}\",\n  \"severity\": \"high\",\n  \"timestamp\": \"{{date}}\"\n}"
+      }
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+---
+# reaudit.yml — post-remediation verification.
+#
+# Runs a Lynis audit and emits the hardening index in the form the daemon
+# parses. Serialised behind the same lock the scheduled publisher uses, so a
+# scheduled run and a post-remediation run cannot interleave and write two
+# different results into one report file.
+
+- name: Re-audit the host after remediation
+  hosts: soar_target
+  connection: local
+  gather_facts: false
+  become: false
+
+  vars:
+    report: /var/log/lynis-report.dat
+    lock: /var/lock/lynis-audit.lock
+
+  tasks:
+
+    - name: Announce the re-audit
+      ansible.builtin.debug:
+        msg: "[reaudit] starting"
+
+    - name: Remove the previous report so a stale value cannot be read back
+      ansible.builtin.file:
+        path: "{{ report }}"
+        state: absent
+
+    - name: Run the Lynis audit under a lock
+      ansible.builtin.command:
+        cmd: "flock -w 180 {{ lock }} /usr/sbin/lynis audit system --quick --cronjob"
+      changed_when: false
+      failed_when: false
+      register: lynis_run
+
+    - name: Read the hardening index from the report
+      ansible.builtin.command:
+        cmd: "grep -E '^hardening_index=' {{ report }}"
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      register: index_line
+
+    - name: Fail if no index was produced
+      ansible.builtin.fail:
+        msg: "[reaudit] FAIL no hardening index produced"
+      when: index_line.stdout | length == 0
+
+    - name: Emit the index in the form the daemon parses
+      ansible.builtin.debug:
+        msg: "HARDENING_INDEX={{ index_line.stdout_lines | last | split('=') | last }}"

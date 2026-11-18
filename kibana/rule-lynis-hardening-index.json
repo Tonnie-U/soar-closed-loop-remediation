@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Trigger A (compliance path): the hardening index falling below baseline.",
+    "This is the trigger named in the Phase 4 brief. It is the slower of the",
+    "two, and deliberately so: it measures the posture of the whole host rather",
+    "than the integrity of a specific file.",
+    "",
+    "Its remediation is verified against the index itself, because the index is",
+    "the condition it fired on. See verification_passed() in the daemon."
+  ],
+  "name": "Lynis Hardening Index Below Baseline (85)",
+  "rule_type_id": ".es-query",
+  "consumer": "alerts",
+  "enabled": true,
+  "schedule": { "interval": "1m" },
+  "params": {
+    "searchType": "esQuery",
+    "index": ["lynis-metrics"],
+    "timeField": "@timestamp",
+    "esQuery": "{\"query\":{\"bool\":{\"filter\":[{\"range\":{\"lynis.hardening_index\":{\"lt\":85}}}]}},\"sort\":[{\"@timestamp\":{\"order\":\"desc\"}}]}",
+    "size": 1,
+    "timeWindowSize": 15,
+    "timeWindowUnit": "m",
+    "threshold": [0],
+    "thresholdComparator": ">"
+  },
+  "actions": [
+    {
+      "group": "query matched",
+      "id": "<connector id of SOAR Remediator Webhook>",
+      "params": {
+        "body": "{\n  \"target_host\": \"{{context.hits.0._source.host.name}}\",\n  \"alert_rule\": \"{{rule.name}}\",\n  \"severity\": \"high\",\n  \"hardening_score\": {{context.hits.0._source.lynis.hardening_index}},\n  \"timestamp\": \"{{date}}\"\n}"
+      }
+    }
+  ]
+}

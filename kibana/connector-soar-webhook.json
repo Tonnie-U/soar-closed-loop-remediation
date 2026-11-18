@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "Kibana action connector that delivers alerts to the SOAR daemon.",
+    "Create with: POST kbn:/api/actions/connector",
+    "",
+    "url: the daemon listens on 0.0.0.0:8088 on the host. Kibana runs in a",
+    "container, so 'localhost' inside that container is the container itself.",
+    "172.18.0.1 is the host's address on the Docker bridge network. Confirm",
+    "yours with: docker network inspect <network> -f '{{(index .IPAM.Config 0).Gateway}}'",
+    "",
+    "X-SOAR-Token MUST be created as a Secret header, not a Config header.",
+    "A Config header is stored in plaintext in the .kibana saved objects index",
+    "and is visible to anyone who can read it; a Secret header is encrypted",
+    "with xpack.encryptedSavedObjects.encryptionKey. The token below is",
+    "redacted - substitute the value of SOAR_TOKEN from /etc/soar/soar.env."
+  ],
+  "name": "SOAR Remediator Webhook",
+  "connector_type_id": ".webhook",
+  "config": {
+    "method": "post",
+    "url": "http://172.18.0.1:8088/webhook/alert",
+    "hasAuth": false,
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  },
+  "secrets": {
+    "secretHeaders": {
+      "X-SOAR-Token": "<REDACTED - see /etc/soar/soar.env>"
+    }
+  }
+}

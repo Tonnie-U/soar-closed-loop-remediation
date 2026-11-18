@@ -1,0 +1,6 @@
+[Unit]
+Description=Configuration integrity check publisher
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/publish-drift-check.sh

@@ -1,0 +1,14 @@
+[Unit]
+Description=Publish the Lynis hardening index every 10 minutes
+
+# Ten minutes is a demonstration interval. A Lynis audit takes 60-90 seconds
+# and is a compliance measure, not a detection control; in production this
+# would be OnCalendar=daily with Persistent=true.
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
