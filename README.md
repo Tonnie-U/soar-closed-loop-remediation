@@ -109,7 +109,7 @@ These are documented because each one presented as success.
 
 **1. systemd sandbox silently blocked every remediation.** The unit used
 `ProtectSystem=strict` with `ReadWritePaths=/var/log`. That makes the entire
-filesystem read-only *inside the unit's mount namespace* — and `sudo` does not
+filesystem read-only *inside the unit's mount namespace* and `sudo` does not
 escape a mount namespace. The playbook ran as root, into a read-only `/etc`,
 and `cp` failed. Detection, alerting and webhook delivery all reported success
 for three consecutive test runs while nothing was ever repaired.
@@ -123,8 +123,8 @@ reported green while doing nothing at all.
 **3. `sudo` stripped the alert context.** `env_reset` is the default, so
 `SOAR_CERTIFICATE_ID` never reached the certificate playbook. The playbook
 correctly refuses to guess which certificate to revoke, so it would have exited
-1 on every real alert. The symptom in the drift logs — `rule=unset host=unset`
-— had been visible for weeks and looked cosmetic.
+1 on every real alert. The symptom in the drift logs  `rule=unset host=unset`
+ had been visible for weeks and looked cosmetic.
 
 **4. Verification was scoped to the wrong signal.** A successful drift
 remediation was recorded as `FAILED` because the Lynis hardening index of the
@@ -154,7 +154,7 @@ the previous file back and fails loudly. The shell version validated after
 writing and had no way back.
 
 **Rollback scoped correctly.** A rollback is right when the *restored file*
-fails validation — the baseline itself is bad. It is wrong when only the
+fails validation ,the baseline itself is bad. It is wrong when only the
 *service reload* fails: the on-disk configuration is correct and validated, and
 reverting it would put the weakened file back. The reload therefore sits
 outside the rescue block. A failed reload is reported, never undone.
